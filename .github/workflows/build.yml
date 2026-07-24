@@ -1,0 +1,56 @@
+name: build
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Clone Repository
+        run: |
+          git clone https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} .
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: Download IPinfo CSV
+        run: |
+          curl -fsSL "https://ipinfo.io/data/ipinfo_lite.csv.gz?token=${{ secrets.IPINFO_TOKEN }}" | zcat > ipinfo_lite.csv
+
+      - name: Init and Run Go Script
+        run: |
+          go mod init builder || true
+          go mod tidy
+          go run main.go
+          rm ipinfo_lite.csv
+
+      - name: Update Repository
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git checkout --orphan orphan
+          git add .
+          git commit -m "Update at $(TZ=PRC date)"
+          git branch -D main
+          git branch -m main
+          git push -f origin main
+
+      - name: Purge CDN Cache
+        run: |
+          wget -qO /dev/null "https://purge.jsdelivr.net/gh/${{ github.repository }}/geoip-cn.dat" || true
+
+
+      - name: Delete Old Workflow Runs
+        run: |
+          gh run list --json databaseId | jq -r '.[] | select(.databaseId != ${{ github.run_id }}) | .databaseId' |
+            xargs -IID \
+              gh api repos/${{ github.repository }}/actions/runs/ID -X DELETE
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
